@@ -1,4 +1,4 @@
-;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t;
+;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t; -*-
 
 ;; Author: NinetyFive
 ;; Version: 0.1.0
