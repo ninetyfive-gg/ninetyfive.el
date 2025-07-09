@@ -304,8 +304,7 @@ Argument LEN len."
 
 ;;;###autoload
 (defun ninetyfive-start ()
-  "Start NinetyFive, we don't autostart it within the package as
-  eval-after-load is discouraged in packages, the user should set up auto start"
+  "Start NinetyFive."
   (interactive)
   (ninetyfive--connect)
   (add-hook 'prog-mode-hook #'ninetyfive--auto-enable-for-buffers)
