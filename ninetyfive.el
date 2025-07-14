@@ -4,7 +4,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1") (websocket "1.12"))
 ;; Keywords: completion
-;; URL: https://github.com/ninetyfive.gg/ninetyfive.el
+;; URL: https://github.com/ninetyfive-gg/ninetyfive.el
 
 ;; This program is free software: you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
