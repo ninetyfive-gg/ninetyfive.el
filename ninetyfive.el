@@ -113,8 +113,8 @@
     (message "NinetyFive: Sending completion request - ID: %s, pos: %d" request-id byte-length)
     (ninetyfive--send-message completion-message)))
 
-(defun ninetyfive--on-websocket-open (websocket)
-  "Handle WEBSOCKET connection opened."
+(defun ninetyfive--on-websocket-open (_websocket)
+  "Handle websocket connection opened."
   (setq ninetyfive--connected t)
   (message "NinetyFive: Connected to WebSocket server"))
 
@@ -155,7 +155,7 @@
         (message "NinetyFive: Ignoring completion response - ID: %s (current: %s)"
                  request-id ninetyfive--current-request-id)))))
 
-(defun ninetyfive--on-websocket-message (websocket frame)
+(defun ninetyfive--on-websocket-message (_websocket frame)
   "Handle WEBSOCKET message received.
 Argument FRAME: payload"
   (let* ((payload (websocket-frame-payload frame))
@@ -166,13 +166,13 @@ Argument FRAME: payload"
       ;; Handle other message types if needed
       (message "NinetyFive: Received message: %s" payload))))
 
-(defun ninetyfive--on-websocket-close (websocket)
+(defun ninetyfive--on-websocket-close (_websocket)
   "Handle WEBSOCKET connection closed."
   (setq ninetyfive--connected nil)
   (setq ninetyfive--websocket nil)
   (message "NinetyFive: WebSocket connection closed"))
 
-(defun ninetyfive--on-websocket-error (websocket type err)
+(defun ninetyfive--on-websocket-error (_websocket _type err)
   "Handle WEBSOCKET error.
 Argument TYPE error type from websocket connection.
 Argument ERR error."
@@ -203,22 +203,10 @@ Argument ERR error."
   (when ninetyfive--connected
     (ninetyfive--send-file-content)))
 
-(defun ninetyfive--on-buffer-changed ()
-  "Handle buffer content changed event."
-  (when ninetyfive--connected
-    (ninetyfive--send-delta-completion-request)))
-
 ;; Hook functions
 (defun ninetyfive--find-file-hook ()
   "Hook function for when a file is opened."
   (ninetyfive--on-file-opened))
-
-(defun ninetyfive--after-change-hook (beg end len)
-  "Hook function for when buffer content change.
-Argument BEG beggining.
-Argument END end.
-Argument LEN len."
-  (ninetyfive--on-buffer-changed))
 
 (defun ninetyfive--accept-completion ()
   "Accept the current completion suggestion."
