@@ -3,7 +3,7 @@
 ;; Author: NinetyFive
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1") (websocket "1.12"))
-;; Keywords: completion
+;; Keywords: convenience, productivity
 ;; URL: https://github.com/ninetyfive-gg/ninetyfive.el
 
 ;; This program is free software: you can redistribute it and/or modify
@@ -69,7 +69,7 @@
   (format "%s%d" (format-time-string "%s") ninetyfive--request-id-counter))
 
 (defun ninetyfive--get-file-path ()
-  "Get the current file path or 'Untitled-1' if buffer is not visiting a file."
+  "Get the current file path or \='Untitled-1\=' if buffer is not visiting a file."
   (or (buffer-file-name) "Untitled-1"))
 
 (defun ninetyfive--get-buffer-content ()
