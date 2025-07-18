@@ -228,18 +228,32 @@ Argument ERR error."
       (and (not (eq this-command 'self-insert-command))
            (not (eq this-command 'ninetyfive--accept-completion)))))
 
+(defun ninetyfive--should-trigger-completion ()
+  "Check if we should request a completion based on current command."
+  (memq this-command '(self-insert-command
+                       delete-char
+                       delete-backward-char
+                       delete-forward-char
+                       backward-delete-char-untabify
+                       newline
+                       newline-and-indent)))
+
 (defun ninetyfive--post-command-hook ()
   "Hook function for post-command events."
   (cond
+   ;; Send completion request if user is typing, deleting, or doing newlines
+   ((and ninetyfive--connected
+         (ninetyfive--should-trigger-completion))
+    ;; Clear any existing completion first, then request new one
+    (ninetyfive--clear-completion)
+    (setq ninetyfive--completion-text "")
+    (setq ninetyfive--current-request-id nil)
+    (ninetyfive--send-delta-completion-request))
    ;; Clear completion if cursor moved or other non-typing command
    ((and ninetyfive--completion-overlay (ninetyfive--should-clear-completion))
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
-    (setq ninetyfive--current-request-id nil))
-   ;; Send completion request if user is typing
-   ((and ninetyfive--connected
-         (eq this-command 'self-insert-command))
-    (ninetyfive--send-delta-completion-request))))
+    (setq ninetyfive--current-request-id nil))))
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
