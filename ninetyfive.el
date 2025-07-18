@@ -276,10 +276,8 @@ Argument ERR error."
         ;; Enable mode
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'post-command-hook #'ninetyfive--post-command-hook nil t)
-        (when (not ninetyfive--connected)
-          (ninetyfive--connect))
-        ;; Send file content for current buffer if it exists
-        (when (buffer-file-name)
+        ;; Only send file content if we're already connected (don't try to connect here)
+        (when (and ninetyfive--connected (buffer-file-name))
           (ninetyfive--on-file-opened)))
     ;; Disable mode
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
@@ -289,43 +287,30 @@ Argument ERR error."
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
 
+(defun ninetyfive-turn-on-unless-buffer-read-only ()
+  "Turn on `ninetyfive-mode' if the buffer is writable."
+  (unless buffer-read-only
+    (ninetyfive-mode 1)))
+
 ;;;###autoload
 (define-globalized-minor-mode global-ninetyfive-mode
-  ninetyfive-mode
-  (lambda ()
-    (unless (minibufferp)
-      (ninetyfive-mode 1)))
+  ninetyfive-mode ninetyfive-turn-on-unless-buffer-read-only
   :group 'ninetyfive)
-
-
-(defun ninetyfive--auto-enable-for-buffers ()
-  "Auto-enable ninetyfive-mode for text and programming buffers."
-  (when (and (or (derived-mode-p 'prog-mode) (derived-mode-p 'text-mode))
-             (not (minibufferp)))
-    (ninetyfive-mode 1)))
 
 ;;;###autoload
 (defun ninetyfive-start ()
   "Start NinetyFive."
   (interactive)
   (ninetyfive--connect)
-  (add-hook 'prog-mode-hook #'ninetyfive--auto-enable-for-buffers)
-  (add-hook 'text-mode-hook #'ninetyfive--auto-enable-for-buffers)
+  (global-ninetyfive-mode 1)
   (message "NinetyFive started"))
 
 ;;;###autoload
 (defun ninetyfive-stop ()
   "Stop NinetyFive."
   (interactive)
+  (global-ninetyfive-mode -1)
   (ninetyfive--disconnect)
-  ;; Remove hooks
-  (remove-hook 'prog-mode-hook #'ninetyfive--auto-enable-for-buffers)
-  (remove-hook 'text-mode-hook #'ninetyfive--auto-enable-for-buffers)
-  ;; Disable mode in all buffers
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when ninetyfive-mode
-        (ninetyfive-mode -1))))
   (message "NinetyFive stopped"))
 
 (provide 'ninetyfive)
