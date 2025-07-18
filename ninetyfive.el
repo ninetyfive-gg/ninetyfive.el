@@ -289,7 +289,8 @@ Argument ERR error."
 
 (defun ninetyfive-turn-on-unless-buffer-read-only ()
   "Turn on `ninetyfive-mode' if the buffer is writable."
-  (unless buffer-read-only
+  (unless (or buffer-read-only
+              (minibufferp)) ;; This avoids showing suggestions when doing M-x...
     (ninetyfive-mode 1)))
 
 ;;;###autoload
