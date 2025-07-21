@@ -63,6 +63,21 @@
 (defvar ninetyfive--completion-overlay nil
   "Overlay for displaying completion text.")
 
+(defvar ninetyfive--buffer-last-content ""
+  "Last known content of the buffer for delta calculation.")
+
+(defvar ninetyfive--buffer-content-sent nil
+  "Whether initial file content has been sent for current buffer.")
+
+(defvar ninetyfive--buffer-local-vars
+  '(ninetyfive--buffer-last-content
+    ninetyfive--buffer-content-sent)
+  "List of buffer-local variables.")
+
+;; This is tracked per buffer
+(dolist (var ninetyfive--buffer-local-vars)
+  (make-variable-buffer-local var))
+
 (defun ninetyfive--generate-request-id ()
   "Generate a unique request ID."
   (setq ninetyfive--request-id-counter (1+ ninetyfive--request-id-counter))
@@ -85,6 +100,72 @@
   (when (and ninetyfive--websocket ninetyfive--connected)
     (let ((json-string (json-encode message)))
       (websocket-send-text ninetyfive--websocket json-string))))
+
+(defun ninetyfive--calculate-and-send-delta ()
+  "Calculate delta between current buffer content and last known content, then send it."
+  (when ninetyfive--connected
+    (let* ((current-content (ninetyfive--get-buffer-content))
+           (last-content ninetyfive--buffer-last-content)
+           (current-bytes (string-to-multibyte current-content))
+           (last-bytes (string-to-multibyte last-content)))
+      
+      (if (not ninetyfive--buffer-content-sent)
+          ;; First time - send content and finish, see https://www.gnu.org/software/emacs/manual/html_node/eintr/progn.html
+          (progn
+            (ninetyfive--send-file-content)
+            (setq ninetyfive--buffer-content-sent t)
+            (setq ninetyfive--buffer-last-content current-content))
+        
+        ;; Calculate delta
+        (let ((delta-info (ninetyfive--find-delta last-bytes current-bytes)))
+          (when delta-info
+            (let ((start (plist-get delta-info :start))
+                  (end (plist-get delta-info :end))
+                  (text (plist-get delta-info :text)))
+              
+              (message "NinetyFive: Sending file delta - start: %d, end: %d, text length: %d"
+                       start end (length text))
+              
+              ;; Send delta message
+              (let ((message `((type . "file-delta")
+                               (start . ,start)
+                               (end . ,end)
+                               (text . ,text))))
+                (ninetyfive--send-message message))
+              
+              ;; Update last known content
+              (setq ninetyfive--buffer-last-content current-content))))))))
+
+(defun ninetyfive--find-delta (old-text new-text)
+  "Find the delta between OLD-TEXT and NEW-TEXT.
+Returns a plist with :start, :end, and :text, or nil if no change."
+  (let ((old-len (length old-text))
+        (new-len (length new-text)))
+    
+    (if (string= old-text new-text)
+        nil ; No change
+      
+      ;; Find common prefix
+      (let ((start 0))
+        (while (and (< start old-len)
+                    (< start new-len)
+                    (= (aref old-text start) (aref new-text start)))
+          (setq start (1+ start)))
+        
+        ;; Find common suffix
+        (let ((old-end old-len)
+              (new-end new-len))
+          (while (and (> old-end start)
+                      (> new-end start)
+                      (= (aref old-text (1- old-end)) (aref new-text (1- new-end))))
+            (setq old-end (1- old-end))
+            (setq new-end (1- new-end)))
+          
+          ;; Extract the changed text
+          (let ((changed-text (substring new-text start new-end)))
+            (list :start start
+                  :end old-end
+                  :text changed-text)))))))
 
 (defun ninetyfive--send-file-content ()
   "Send file content message to the server."
@@ -109,6 +190,26 @@
     
     (message "NinetyFive: Sending updated file content before completion request")
     (ninetyfive--send-file-content)
+    
+    (message "NinetyFive: Sending completion request - ID: %s, pos: %d" request-id byte-length)
+    (ninetyfive--send-message completion-message)))
+
+(defun ninetyfive--send-delta-completion-request ()
+  "Send delta completion request to the server."
+  (let* ((text-to-cursor (ninetyfive--get-text-to-cursor))
+         (byte-length (string-bytes text-to-cursor))
+         (request-id (ninetyfive--generate-request-id))
+         (completion-message `((type . "delta-completion-request")
+                               (requestId . ,request-id)
+                               (repo . "unknown")
+                               (pos . ,byte-length))))
+    ;; Clear previous completion and set new request ID
+    (ninetyfive--clear-completion)
+    (setq ninetyfive--current-request-id request-id)
+    (setq ninetyfive--completion-text "")
+    
+    ;; Send delta or full content as needed
+    (ninetyfive--calculate-and-send-delta)
     
     (message "NinetyFive: Sending completion request - ID: %s, pos: %d" request-id byte-length)
     (ninetyfive--send-message completion-message)))
@@ -201,7 +302,10 @@ Argument ERR error."
 (defun ninetyfive--on-file-opened ()
   "Handle file opened event."
   (when ninetyfive--connected
-    (ninetyfive--send-file-content)))
+    (setq ninetyfive--buffer-content-sent nil)
+    (setq ninetyfive--buffer-last-content "")
+
+    (ninetyfive--calculate-and-send-delta)))
 
 ;; Hook functions
 (defun ninetyfive--find-file-hook ()
@@ -276,16 +380,26 @@ Argument ERR error."
         ;; Enable mode
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'post-command-hook #'ninetyfive--post-command-hook nil t)
+
+        ;; Initialize buffer state
+        (setq ninetyfive--buffer-content-sent nil)
+        (setq ninetyfive--buffer-last-content "")
+
         ;; Only send file content if we're already connected (don't try to connect here)
         (when (and ninetyfive--connected (buffer-file-name))
           (ninetyfive--on-file-opened)))
+
     ;; Disable mode
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
     (remove-hook 'post-command-hook #'ninetyfive--post-command-hook t)
+    
     ;; Clear any active completion
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
-    (setq ninetyfive--current-request-id nil)))
+    (setq ninetyfive--current-request-id nil)
+    
+    (setq ninetyfive--buffer-content-sent nil)
+    (setq ninetyfive--buffer-last-content "")))
 
 (defun ninetyfive-turn-on-unless-buffer-read-only ()
   "Turn on `ninetyfive-mode' if the buffer is writable."
