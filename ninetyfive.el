@@ -45,6 +45,11 @@
   :type 'string
   :group 'ninetyfive)
 
+(defcustom ninetyfive-debug-messages nil
+  "Whether to show debug messages."
+  :type 'boolean
+  :group 'ninetyfive)
+
 (defvar ninetyfive--websocket nil
   "WebSocket connection to NinetyFive API.")
 
@@ -95,6 +100,11 @@
   "Get text from beginning of buffer to current cursor position."
   (buffer-substring-no-properties (point-min) (point)))
 
+(defun ninetyfive--debug-message (format-string &rest args)
+  "Display debug message if debug messages are enabled."
+  (when ninetyfive-debug-messages
+    (apply #'message (concat "NinetyFive: " format-string) args)))
+
 (defun ninetyfive--send-message (message)
   "Send MESSAGE to the WebSocket server."
   (when (and ninetyfive--websocket ninetyfive--connected)
@@ -123,8 +133,8 @@
                   (end (plist-get delta-info :end))
                   (text (plist-get delta-info :text)))
               
-              (message "NinetyFive: Sending file delta - start: %d, end: %d, text length: %d"
-                       start end (length text))
+              (ninetyfive--debug-message "Sending file delta - start: %d, end: %d, text length: %d"
+                                         start end (length text))
               
               ;; Send delta message
               (let ((message `((type . "file-delta")
@@ -193,10 +203,10 @@ Returns a plist with :start, :end, and :text, or nil if no change."
     (setq ninetyfive--current-request-id request-id)
     (setq ninetyfive--completion-text "")
     
-    (message "NinetyFive: Sending updated file content before completion request")
+    (ninetyfive--debug-message "Sending updated file content before completion request")
     (ninetyfive--send-file-content)
     
-    (message "NinetyFive: Sending completion request - ID: %s, pos: %d" request-id byte-length)
+    (ninetyfive--debug-message "Sending completion request - ID: %s, pos: %d" request-id byte-length)
     (ninetyfive--send-message completion-message)))
 
 (defun ninetyfive--send-delta-completion-request ()
@@ -216,7 +226,7 @@ Returns a plist with :start, :end, and :text, or nil if no change."
     ;; Send delta or full content as needed
     (ninetyfive--calculate-and-send-delta)
     
-    (message "NinetyFive: Sending completion request - ID: %s, pos: %d" request-id byte-length)
+    (ninetyfive--debug-message "Sending completion request - ID: %s, pos: %d" request-id byte-length)
     (ninetyfive--send-message completion-message)))
 
 (defun ninetyfive--on-websocket-open (_websocket)
@@ -248,10 +258,10 @@ Returns a plist with :start, :end, and :text, or nil if no change."
              completion-value
              (string= request-id ninetyfive--current-request-id))
         (progn
-          (message "NinetyFive: Received completion response - ID: %s, value: %S, total length: %d"
-                   request-id
-                   completion-value
-                   (+ (length ninetyfive--completion-text) (length completion-value)))
+          (ninetyfive--debug-message "Received completion response - ID: %s, value: %S, total length: %d"
+                                     request-id
+                                     completion-value
+                                     (+ (length ninetyfive--completion-text) (length completion-value)))
           ;; Accumulate completion text
           (setq ninetyfive--completion-text
                 (concat ninetyfive--completion-text completion-value))
@@ -259,8 +269,8 @@ Returns a plist with :start, :end, and :text, or nil if no change."
           (ninetyfive--show-completion ninetyfive--completion-text))
       ;; TODO: We should send a cancel message here
       (when request-id
-        (message "NinetyFive: Ignoring completion response - ID: %s (current: %s)"
-                 request-id ninetyfive--current-request-id)))))
+        (ninetyfive--debug-message "Ignoring completion response - ID: %s (current: %s)"
+                                   request-id ninetyfive--current-request-id)))))
 
 (defun ninetyfive--on-websocket-message (_websocket frame)
   "Handle WEBSOCKET message received.
@@ -271,7 +281,7 @@ Argument FRAME: payload"
     (if (assq 'r message)
         (ninetyfive--handle-completion-response message)
       ;; Handle other message types if needed
-      (message "NinetyFive: Received message: %s" payload))))
+      (ninetyfive--debug-message "Received message: %s" payload))))
 
 (defun ninetyfive--on-websocket-close (_websocket)
   "Handle WEBSOCKET connection closed."
@@ -450,6 +460,14 @@ Argument ERR error."
   (ninetyfive--remove-global-hooks)
   (ninetyfive--disconnect)
   (message "NinetyFive stopped"))
+
+;;;###autoload
+(defun ninetyfive-toggle-debug-messages ()
+  "Toggle debug messages on/off."
+  (interactive)
+  (setq ninetyfive-debug-messages (not ninetyfive-debug-messages))
+  (message "NinetyFive debug messages %s" 
+           (if ninetyfive-debug-messages "enabled" "disabled")))
 
 (provide 'ninetyfive)
 
