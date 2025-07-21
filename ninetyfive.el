@@ -167,6 +167,11 @@ Returns a plist with :start, :end, and :text, or nil if no change."
                   :end old-end
                   :text changed-text)))))))
 
+(defun ninetyfive--send-set-workspace ()
+  "Send set-workspace message to the server."
+  (let ((message `((type . "set-workspace"))))
+    (ninetyfive--send-message message)))
+
 (defun ninetyfive--send-file-content ()
   "Send file content message to the server."
   (let ((message `((type . "file-content")
@@ -217,7 +222,8 @@ Returns a plist with :start, :end, and :text, or nil if no change."
 (defun ninetyfive--on-websocket-open (_websocket)
   "Handle websocket connection opened."
   (setq ninetyfive--connected t)
-  (message "NinetyFive: Connected to WebSocket server"))
+  (message "NinetyFive: Connected to WebSocket server")
+  (ninetyfive--send-set-workspace))
 
 (defun ninetyfive--clear-completion ()
   "Clear the current completion overlay."
@@ -311,6 +317,12 @@ Argument ERR error."
 (defun ninetyfive--find-file-hook ()
   "Hook function for when a file is opened."
   (ninetyfive--on-file-opened))
+
+(defun ninetyfive--buffer-switch-hook ()
+  "Function to trigger when switching buffers, since we need to update the workspace."
+  (when ninetyfive--connected
+    (ninetyfive--send-set-workspace)
+    (ninetyfive--on-file-opened)))
 
 (defun ninetyfive--accept-completion ()
   "Accept the current completion suggestion."
@@ -412,11 +424,21 @@ Argument ERR error."
   ninetyfive-mode ninetyfive-turn-on-unless-buffer-read-only
   :group 'ninetyfive)
 
+;; Add global hook for buffer switching
+(defun ninetyfive--setup-global-hooks ()
+  "Setup global hooks for NinetyFive."
+  (add-hook 'buffer-list-update-hook #'ninetyfive--buffer-switch-hook))
+
+(defun ninetyfive--remove-global-hooks ()
+  "Remove global hooks for NinetyFive."
+  (remove-hook 'buffer-list-update-hook #'ninetyfive--buffer-switch-hook))
+
 ;;;###autoload
 (defun ninetyfive-start ()
   "Start NinetyFive."
   (interactive)
   (ninetyfive--connect)
+  (ninetyfive--setup-global-hooks)
   (global-ninetyfive-mode 1)
   (message "NinetyFive started"))
 
@@ -425,6 +447,7 @@ Argument ERR error."
   "Stop NinetyFive."
   (interactive)
   (global-ninetyfive-mode -1)
+  (ninetyfive--remove-global-hooks)
   (ninetyfive--disconnect)
   (message "NinetyFive stopped"))
 
