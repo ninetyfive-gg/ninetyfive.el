@@ -117,16 +117,9 @@
 
 (defun ninetyfive--send-message (message)
   "Send MESSAGE to the WebSocket server."
-  (message "[ninetyfive] Attempting to send message: %S" message)
-  (cond
-   ((not ninetyfive--connected)
-    (message "[ninetyfive] Cannot send message — not connected."))
-   ((not ninetyfive--websocket)
-    (message "[ninetyfive] Cannot send message — websocket object is nil."))
-   (t
+  (when (and ninetyfive--websocket ninetyfive--connected)
     (let ((json-string (json-encode message)))
-      (message "[ninetyfive] Sending message over WebSocket: %s" json-string)
-      (websocket-send-text ninetyfive--websocket json-string)))))
+      (websocket-send-text ninetyfive--websocket json-string))))
 
 
 (defun ninetyfive--calculate-and-send-delta ()
@@ -474,7 +467,6 @@ Argument FRAME: payload"
 
 (defun ninetyfive--post-command-hook ()
   "Hook function for post-command events."
-  (message "[ninetyfive] post-command-hook triggered. connected=%s" ninetyfive--connected)
   (cond
    ;; Send completion request if user is typing, deleting, or doing newlines
    ((and ninetyfive--connected
