@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'websocket)
+(require 'async)
 (require 'json)
 
 (defgroup ninetyfive nil
@@ -49,6 +50,15 @@
   "Whether to show debug messages."
   :type 'boolean
   :group 'ninetyfive)
+
+(defvar ninetyfive--reconnect-delay 5
+  "Seconds to wait before attempting to reconnect to NinetyFive.")
+
+(defvar ninetyfive--websocket-id 0
+  "Monotonically increasing ID to identify the current WebSocket connection.")
+
+(defvar ninetyfive--reconnect-timer nil
+  "Timer object used for reconnection attempts.")
 
 (defvar ninetyfive--websocket nil
   "WebSocket connection to NinetyFive API.")
@@ -110,6 +120,7 @@
   (when (and ninetyfive--websocket ninetyfive--connected)
     (let ((json-string (json-encode message)))
       (websocket-send-text ninetyfive--websocket json-string))))
+
 
 (defun ninetyfive--calculate-and-send-delta ()
   "Calculate delta between current buffer content and last known content, then send it."
@@ -229,11 +240,17 @@ Returns a plist with :start, :end, and :text, or nil if no change."
     (ninetyfive--debug-message "Sending completion request - ID: %s, pos: %d" request-id byte-length)
     (ninetyfive--send-message completion-message)))
 
-(defun ninetyfive--on-websocket-open (_websocket)
-  "Handle websocket connection opened."
-  (setq ninetyfive--connected t)
-  (message "NinetyFive: Connected to WebSocket server")
-  (ninetyfive--send-set-workspace))
+(defun ninetyfive--on-websocket-open (_websocket id)
+  (when (eq id ninetyfive--websocket-id)
+    (message "[ninetyfive] WebSocket opened (id %s)" id)
+    (when ninetyfive--reconnect-timer
+      (cancel-timer ninetyfive--reconnect-timer)
+      (setq ninetyfive--reconnect-timer nil))
+    (setq ninetyfive--connected t)
+    (message "[ninetyfive] Connected flag set to t.")
+    (ninetyfive--send-set-workspace)
+    (when (and ninetyfive-mode (buffer-file-name))
+      (ninetyfive--on-file-opened))))
 
 (defun ninetyfive--clear-completion ()
   "Clear the current completion overlay."
@@ -283,30 +300,115 @@ Argument FRAME: payload"
       ;; Handle other message types if needed
       (ninetyfive--debug-message "Received message: %s" payload))))
 
-(defun ninetyfive--on-websocket-close (_websocket)
-  "Handle WEBSOCKET connection closed."
-  (setq ninetyfive--connected nil)
-  (setq ninetyfive--websocket nil)
-  (message "NinetyFive: WebSocket connection closed"))
+(defun ninetyfive--schedule-reconnect ()
+  "Schedule a safe, non-blocking reconnection attempt."
+  (if ninetyfive--connected
+      (message "[ninetyfive] Skipping reconnect — already connected.")
+    (if ninetyfive--reconnect-timer
+        (message "[ninetyfive] Reconnect already scheduled.")
+      (message "[ninetyfive] Scheduling reconnect in %s seconds..." ninetyfive--reconnect-delay)
+      (setq ninetyfive--reconnect-timer
+            (run-at-time ninetyfive--reconnect-delay nil
+                         (lambda ()
+                           (setq ninetyfive--reconnect-timer nil)
+                           (ninetyfive--connect)))))))
 
-(defun ninetyfive--on-websocket-error (_websocket _type err)
-  "Handle WEBSOCKET error.
-Argument TYPE error type from websocket connection.
-Argument ERR error."
-  (setq ninetyfive--connected nil)
-  (message "NinetyFive: WebSocket error: %s" err))
+(defun ninetyfive--attempt-reconnect ()
+  "Try to reconnect to the WebSocket server, non-blocking."
+  (setq ninetyfive--reconnect-timer nil)
+
+  (let ((url (url-generic-parse-url ninetyfive-websocket-url)))
+    (condition-case err
+        (progn
+          ;; avoids blocking
+          (let ((probe (make-network-process
+                        :name "ninetyfive-probe"
+                        :host (url-host url)
+                        :service (url-port url)
+                        :noquery t
+                        :nowait t)))
+            (delete-process probe)
+            (ninetyfive--connect)))
+      (error
+       (message "[ninetyfive] Connection failed: %s — retrying..." (error-message-string err))
+       (ninetyfive--schedule-reconnect)))))
+
+(defun ninetyfive--on-websocket-close (_websocket id)
+  (when (eq id ninetyfive--websocket-id)
+    (message "[ninetyfive] WebSocket closed (id %s)" id)
+    (setq ninetyfive--connected nil)
+    (setq ninetyfive--websocket nil)
+    (ninetyfive--schedule-reconnect)))
+
+(defun ninetyfive--on-websocket-error (_websocket _type err id)
+  (when (eq id ninetyfive--websocket-id)
+    (message "[ninetyfive] WebSocket error (id %s): %s" id err)
+    (setq ninetyfive--connected nil)))
 
 (defun ninetyfive--connect ()
-  "Connect to the NinetyFive WebSocket server."
+  "Asynchronously probe and connect to the NinetyFive WebSocket server."
+  (message "[ninetyfive] >>> connect called")
+
+  ;; exit if we're already connected
+  (when ninetyfive--connected
+    (cl-return-from ninetyfive--connect nil))
+
   (when ninetyfive--websocket
-    (websocket-close ninetyfive--websocket))
-  
-  (setq ninetyfive--websocket
-        (websocket-open ninetyfive-websocket-url
-                        :on-open #'ninetyfive--on-websocket-open
-                        :on-message #'ninetyfive--on-websocket-message
-                        :on-close #'ninetyfive--on-websocket-close
-                        :on-error #'ninetyfive--on-websocket-error)))
+    (message "[ninetyfive] Closing existing WebSocket...")
+    (ignore-errors (websocket-close ninetyfive--websocket))
+    (setq ninetyfive--websocket nil))
+
+  ;; we need to set a websocket id during reconnect to ensure we don't hit a race condition
+  ;; when we try to reconnect.
+  (setq ninetyfive--websocket-id (1+ ninetyfive--websocket-id))
+  (let ((this-id ninetyfive--websocket-id))
+
+    (let* ((parsed-url (url-generic-parse-url ninetyfive-websocket-url))
+           (host (url-host parsed-url))
+           (raw-port (url-port parsed-url))
+           (port (if (or (null raw-port) (= raw-port 0))
+                     (if (string= (url-type parsed-url) "wss") 443 80)
+                   raw-port)))
+
+      (async-start
+       `(lambda ()
+          (let ((host ,host)
+                (port ,port))
+            (message "[ninetyfive] (child) Probing %s:%s..." host port)
+            (condition-case err
+                (let ((sock (make-network-process
+                             :name "ninetyfive-probe"
+                             :host host
+                             :service port
+                             :noquery t
+                             :nowait nil)))
+                  (delete-process sock)
+                  (message "[ninetyfive] (child) Probe succeeded.")
+                  'success)
+              (error
+               (message "[ninetyfive] (child) Probe failed: %S" err)
+               (list 'error err)))))
+
+       (lambda (result)
+         (message "[ninetyfive] >>> async callback fired with result: %S" result)
+         (pcase result
+           (`success
+            (if ninetyfive--connected
+                (message "[ninetyfive] Probe succeeded, but already connected.")
+              (setq ninetyfive--websocket
+                    (websocket-open ninetyfive-websocket-url
+                                    :on-open (lambda (ws)
+                                               (ninetyfive--on-websocket-open ws this-id))
+                                    :on-message #'ninetyfive--on-websocket-message
+                                    :on-close (lambda (ws)
+                                                (ninetyfive--on-websocket-close ws this-id))
+                                    :on-error (lambda (ws type err)
+                                                (ninetyfive--on-websocket-error ws type err this-id))))))
+           
+           (`(error ,err)
+            (unless ninetyfive--connected
+              (message "[ninetyfive] Failed to connect (from async): %s" (error-message-string err))
+              (ninetyfive--schedule-reconnect)))))))))
 
 (defun ninetyfive--disconnect ()
   "Disconnect from the NinetyFive WebSocket server."
@@ -320,7 +422,6 @@ Argument ERR error."
   (when ninetyfive--connected
     (setq ninetyfive--buffer-content-sent nil)
     (setq ninetyfive--buffer-last-content "")
-
     (ninetyfive--calculate-and-send-delta)))
 
 ;; Hook functions
