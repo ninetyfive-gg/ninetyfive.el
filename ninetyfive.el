@@ -452,20 +452,24 @@ Argument FRAME: payload"
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
 
+(defvar ninetyfive--last-command nil
+  "Command to use when checking if completion should trigger.")
+
 (defun ninetyfive--should-clear-completion ()
   "Check if completion should be cleared based on current command."
-  (or (memq this-command '(forward-char backward-char
+  (or (memq ninetyfive--last-command '(forward-char backward-char
                            next-line previous-line
                            beginning-of-line end-of-line
                            forward-word backward-word
                            scroll-up-command scroll-down-command
                            mouse-set-point))
-      (and (not (eq this-command 'self-insert-command))
-           (not (eq this-command 'ninetyfive--accept-completion)))))
+      (and (not (eq ninetyfive--last-command 'self-insert-command))
+           (not (eq ninetyfive--last-command 'ninetyfive--accept-completion)))))
 
 (defun ninetyfive--should-trigger-completion ()
   "Check if we should request a completion based on current command."
-  (memq this-command '(self-insert-command
+  ;; we need to store last-command since the debounce 'swallows' the command
+  (memq ninetyfive--last-command '(self-insert-command
                        delete-char
                        delete-backward-char
                        delete-forward-char
@@ -473,22 +477,45 @@ Argument FRAME: payload"
                        newline
                        newline-and-indent)))
 
-(defun ninetyfive--post-command-hook ()
-  "Hook function for post-command events."
-  (cond
-   ;; Send completion request if user is typing, deleting, or doing newlines
-   ((and ninetyfive--connected
-         (ninetyfive--should-trigger-completion))
-    ;; Clear any existing completion first, then request new one
+(defvar ninetyfive--completion-timer nil
+  "Timer for debouncing delta completion requests.")
+
+;; small debounce to avoid cpu overload during completion reset
+(defconst ninetyfive--completion-delay 0.1
+  "Delay in seconds before triggering a completion request.")
+
+(defun ninetyfive--debounced-completion-request ()
+  "Trigger the delta completion request if still valid."
+  (setq ninetyfive--completion-timer nil)
+
+  (when (and ninetyfive--connected
+             (ninetyfive--should-trigger-completion))
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)
-    (ninetyfive--send-delta-completion-request))
-   ;; Clear completion if cursor moved or other non-typing command
+    (ninetyfive--send-delta-completion-request)))
+
+(defun ninetyfive--post-command-hook ()
+  "Efficient hook function for triggering completions."
+  (setq ninetyfive--last-command this-command)
+  (cond
+   ((and ninetyfive--connected
+         (ninetyfive--should-trigger-completion))
+    ;; wipe pending timer if exists
+    (when (timerp ninetyfive--completion-timer)
+      (cancel-timer ninetyfive--completion-timer))
+
+    (setq ninetyfive--completion-timer
+      (run-at-time ninetyfive--completion-delay nil #'ninetyfive--debounced-completion-request)))
+
    ((and ninetyfive--completion-overlay (ninetyfive--should-clear-completion))
+    (when (timerp ninetyfive--completion-timer)
+      (cancel-timer ninetyfive--completion-timer)
+      (setq ninetyfive--completion-timer nil))
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil))))
+
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
