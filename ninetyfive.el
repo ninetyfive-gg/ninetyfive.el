@@ -214,26 +214,6 @@ Returns a plist with :start, :end, and :text, or nil if no change."
     (setq ninetyfive--current-request-id request-id)
     (setq ninetyfive--completion-text "")
     
-    (ninetyfive--debug-message "Sending updated file content before completion request")
-    (ninetyfive--send-file-content)
-    
-    (ninetyfive--debug-message "Sending completion request - ID: %s, pos: %d" request-id byte-length)
-    (ninetyfive--send-message completion-message)))
-
-(defun ninetyfive--send-delta-completion-request ()
-  "Send delta completion request to the server."
-  (let* ((text-to-cursor (ninetyfive--get-text-to-cursor))
-         (byte-length (string-bytes text-to-cursor))
-         (request-id (ninetyfive--generate-request-id))
-         (completion-message `((type . "delta-completion-request")
-                               (requestId . ,request-id)
-                               (repo . "unknown")
-                               (pos . ,byte-length))))
-    ;; Clear previous completion and set new request ID
-    (ninetyfive--clear-completion)
-    (setq ninetyfive--current-request-id request-id)
-    (setq ninetyfive--completion-text "")
-    
     ;; Send delta or full content as needed
     (ninetyfive--calculate-and-send-delta)
     
