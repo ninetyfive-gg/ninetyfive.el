@@ -256,7 +256,11 @@ Returns a plist with :start, :end, and :text, or nil if no change."
   "Clear the current completion overlay."
   (when ninetyfive--completion-overlay
     (delete-overlay ninetyfive--completion-overlay)
-    (setq ninetyfive--completion-overlay nil)))
+    (setq ninetyfive--completion-overlay nil))
+  ;; Remove the keybind on tab
+  (when ninetyfive-mode
+    (define-key ninetyfive-mode-map (kbd "TAB") nil)
+    (define-key ninetyfive-mode-map (kbd "<tab>") nil)))
 
 (defun ninetyfive--show-completion (text)
   "Show completion TEXT as an overlay at current point."
@@ -265,7 +269,11 @@ Returns a plist with :start, :end, and :text, or nil if no change."
     (setq ninetyfive--completion-overlay (make-overlay (point) (point)))
     (overlay-put ninetyfive--completion-overlay 'after-string
                  (propertize text 'face '(:foreground "gray" :slant italic)))
-    (overlay-put ninetyfive--completion-overlay 'ninetyfive-completion t)))
+    (overlay-put ninetyfive--completion-overlay 'ninetyfive-completion t)
+    ;; Add the keybind when the user can accept something
+    (when ninetyfive-mode
+      (define-key ninetyfive-mode-map (kbd "TAB") #'ninetyfive-accept-completion)
+      (define-key ninetyfive-mode-map (kbd "<tab>") #'ninetyfive-accept-completion))))
 
 (defun ninetyfive--handle-completion-response (message)
   "Handle completion response, we dont care about other MESSAGEs right now."
@@ -494,10 +502,7 @@ Argument FRAME: payload"
   "Minor mode for NinetyFive."
   :lighter " NF"
   :global nil
-  :keymap (let ((map (make-sparse-keymap)))
-            (define-key map (kbd "TAB") #'ninetyfive-accept-completion)
-            (define-key map (kbd "<tab>") #'ninetyfive-accept-completion)
-            map)
+  :keymap (make-sparse-keymap)
   (if ninetyfive-mode
       (progn
         ;; Enable mode
