@@ -214,8 +214,10 @@ START and END are buffer positions, TEXT is the replacement text."
   (ninetyfive--clear-completion)
   (when (and text (> (length text) 0))
     (setq ninetyfive--completion-overlay (make-overlay (point) (point)))
-    (overlay-put ninetyfive--completion-overlay 'after-string
-                 (propertize text 'face '(:foreground "gray" :slant italic)))
+    (let ((completion-overlay-text (propertize text 'face '(:foreground "gray" :slant italic))))
+      ;; Place cursor before suggestion
+      (put-text-property 0 1 'cursor t completion-overlay-text)
+      (overlay-put ninetyfive--completion-overlay 'after-string completion-overlay-text))
     (overlay-put ninetyfive--completion-overlay 'ninetyfive-completion t)
     ;; Add the keybind when the user can accept something
     (when ninetyfive-mode
