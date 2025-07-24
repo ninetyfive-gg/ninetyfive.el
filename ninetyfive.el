@@ -104,14 +104,12 @@
   (or (buffer-file-name) "Untitled-1"))
 
 (defun ninetyfive--get-buffer-content ()
-  "Get the content of the last known user-facing buffer."
+  "Get the content of the last known user-facing buffer, or an empty string if unset."
   (if (and ninetyfive--last-buffer
            (buffer-live-p ninetyfive--last-buffer))
       (with-current-buffer ninetyfive--last-buffer
         (buffer-substring-no-properties (point-min) (point-max)))
-    (progn
-      (message "ERROR: last-buffer is not set or dead")
-      "")))
+    "")) ;; return empty
 
 (defun ninetyfive--get-text-to-cursor ()
   "Get text from beginning of buffer to current cursor position."
