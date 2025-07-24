@@ -51,6 +51,11 @@
   :type 'boolean
   :group 'ninetyfive)
 
+(defvar ninetyfive--last-buffer nil
+  "The most recent buffer where the user made an edit.
+  Used to safely access buffer content from asynchronous contexts,
+  may not point to the actual user-facing editing buffer.")
+
 (defvar ninetyfive--reconnect-delay 5
   "Seconds to wait before attempting to reconnect to NinetyFive.")
 
@@ -99,8 +104,14 @@
   (or (buffer-file-name) "Untitled-1"))
 
 (defun ninetyfive--get-buffer-content ()
-  "Get the current buffer content."
-  (buffer-substring-no-properties (point-min) (point-max)))
+  "Get the content of the last known user-facing buffer."
+  (if (and ninetyfive--last-buffer
+           (buffer-live-p ninetyfive--last-buffer))
+      (with-current-buffer ninetyfive--last-buffer
+        (buffer-substring-no-properties (point-min) (point-max)))
+    (progn
+      (message "ERROR: last-buffer is not set or dead")
+      "")))
 
 (defun ninetyfive--get-text-to-cursor ()
   "Get text from beginning of buffer to current cursor position."
@@ -116,7 +127,6 @@
   (when (and ninetyfive--websocket ninetyfive--connected)
     (let ((json-string (json-encode message)))
       (websocket-send-text ninetyfive--websocket json-string))))
-
 
 (defun ninetyfive--send-delta-from-change (start end text)
   "Send delta message using change information from after-change-functions.
@@ -369,6 +379,7 @@ START and END are the beginning and end of region just changed."
     (let ((text (buffer-substring-no-properties start end)))
       ;; Send delta for the change
       (ninetyfive--send-delta-from-change start end text)
+      (setq ninetyfive--last-buffer (current-buffer))
       
       ;; Always clear previous completion and request new one for any change
       (ninetyfive--clear-completion)
