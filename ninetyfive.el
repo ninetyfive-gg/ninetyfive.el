@@ -105,11 +105,7 @@
 
 (defun ninetyfive--get-buffer-content ()
   "Get the content of the last known user-facing buffer, or an empty string if unset."
-  (if (and ninetyfive--last-buffer
-           (buffer-live-p ninetyfive--last-buffer))
-      (with-current-buffer ninetyfive--last-buffer
-        (buffer-substring-no-properties (point-min) (point-max)))
-    "")) ;; return empty
+  (buffer-substring-no-properties (point-min) (point-max)))
 
 (defun ninetyfive--get-text-to-cursor ()
   "Get text from beginning of buffer to current cursor position."
@@ -126,9 +122,9 @@
     (let ((json-string (json-encode message)))
       (websocket-send-text ninetyfive--websocket json-string))))
 
-(defun ninetyfive--send-delta-from-change (start end text)
+(defun ninetyfive--send-delta-from-change (start end old-length text)
   "Send delta message using change information from after-change-functions.
-START and END are buffer positions, TEXT is the replacement text."
+START and END are buffer positions, OLD-LENGTH is the length of the original text, TEXT is the replacement text."
   (when ninetyfive--connected
     (if (not ninetyfive--buffer-content-sent)
         ;; First time - send full content
@@ -136,10 +132,8 @@ START and END are buffer positions, TEXT is the replacement text."
           (ninetyfive--send-file-content)
           (setq ninetyfive--buffer-content-sent t))
       
-      ;; Send delta using the change information directly
-      ;; Convert buffer positions to byte positions
-      (let ((byte-start (string-bytes (buffer-substring-no-properties (point-min) start)))
-            (byte-end (string-bytes (buffer-substring-no-properties (point-min) end))))
+      (let* ((byte-start (string-bytes (buffer-substring-no-properties (point-min) start)))
+             (byte-end (+ byte-start old-length)))
         
         (ninetyfive--debug-message "Sending file delta - start: %d, end: %d, text length: %d"
                                    byte-start byte-end (length text))
@@ -357,7 +351,7 @@ Argument FRAME: payload"
 
 (defun ninetyfive--on-file-opened ()
   "Handle file opened event."
-  (when ninetyfive--connected
+  (when (and ninetyfive--connected (derived-mode-p 'prog-mode))
     (setq ninetyfive--buffer-content-sent nil)
     (ninetyfive--calculate-and-send-delta)))
 
@@ -372,13 +366,13 @@ Argument FRAME: payload"
     (ninetyfive--send-set-workspace)
     (ninetyfive--on-file-opened)))
 
-(defun ninetyfive--after-change-hook (start end _old-length)
+(defun ninetyfive--after-change-hook (start end old-length)
   "Hook function for after-change-functions to send deltas and request completions.
 START and END are the beginning and end of region just changed."
-  (when ninetyfive--connected
+  (when (and ninetyfive--connected (derived-mode-p 'prog-mode))
     (let ((text (buffer-substring-no-properties start end)))
       ;; Send delta for the change
-      (ninetyfive--send-delta-from-change start end text)
+      (ninetyfive--send-delta-from-change start end old-length text)
       (setq ninetyfive--last-buffer (current-buffer))
       
       ;; Always clear previous completion and request new one for any change
