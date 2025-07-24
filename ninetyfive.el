@@ -78,15 +78,11 @@
 (defvar ninetyfive--completion-overlay nil
   "Overlay for displaying completion text.")
 
-(defvar ninetyfive--buffer-last-content ""
-  "Last known content of the buffer for delta calculation.")
-
 (defvar ninetyfive--buffer-content-sent nil
   "Whether initial file content has been sent for current buffer.")
 
 (defvar ninetyfive--buffer-local-vars
-  '(ninetyfive--buffer-last-content
-    ninetyfive--buffer-content-sent)
+  '(ninetyfive--buffer-content-sent)
   "List of buffer-local variables.")
 
 ;; This is tracked per buffer
@@ -122,71 +118,36 @@
       (websocket-send-text ninetyfive--websocket json-string))))
 
 
-(defun ninetyfive--calculate-and-send-delta ()
-  "Calculate delta between current buffer content and last known content, then send it."
+(defun ninetyfive--send-delta-from-change (start end text)
+  "Send delta message using change information from after-change-functions.
+START and END are buffer positions, TEXT is the replacement text."
   (when ninetyfive--connected
-    (let* ((current-content (ninetyfive--get-buffer-content))
-           (last-content ninetyfive--buffer-last-content)
-           (current-bytes (string-to-multibyte current-content))
-           (last-bytes (string-to-multibyte last-content)))
+    (if (not ninetyfive--buffer-content-sent)
+        ;; First time - send full content
+        (progn
+          (ninetyfive--send-file-content)
+          (setq ninetyfive--buffer-content-sent t))
       
-      (if (not ninetyfive--buffer-content-sent)
-          ;; First time - send content and finish, see https://www.gnu.org/software/emacs/manual/html_node/eintr/progn.html
-          (progn
-            (ninetyfive--send-file-content)
-            (setq ninetyfive--buffer-content-sent t)
-            (setq ninetyfive--buffer-last-content current-content))
+      ;; Send delta using the change information directly
+      ;; Convert buffer positions to byte positions
+      (let ((byte-start (string-bytes (buffer-substring-no-properties (point-min) start)))
+            (byte-end (string-bytes (buffer-substring-no-properties (point-min) end))))
         
-        ;; Calculate delta
-        (let ((delta-info (ninetyfive--find-delta last-bytes current-bytes)))
-          (when delta-info
-            (let ((start (plist-get delta-info :start))
-                  (end (plist-get delta-info :end))
-                  (text (plist-get delta-info :text)))
-              
-              (ninetyfive--debug-message "Sending file delta - start: %d, end: %d, text length: %d"
-                                         start end (length text))
-              
-              ;; Send delta message
-              (let ((message `((type . "file-delta")
-                               (start . ,start)
-                               (end . ,end)
-                               (text . ,text))))
-                (ninetyfive--send-message message))
-              
-              ;; Update last known content
-              (setq ninetyfive--buffer-last-content current-content))))))))
+        (ninetyfive--debug-message "Sending file delta - start: %d, end: %d, text length: %d"
+                                   byte-start byte-end (length text))
+        
+        ;; Send delta message
+        (let ((message `((type . "file-delta")
+                         (start . ,byte-start)
+                         (end . ,byte-end)
+                         (text . ,text))))
+          (ninetyfive--send-message message))))))
 
-(defun ninetyfive--find-delta (old-text new-text)
-  "Find the delta between OLD-TEXT and NEW-TEXT.
-Returns a plist with :start, :end, and :text, or nil if no change."
-  (let ((old-len (length old-text))
-        (new-len (length new-text)))
-    
-    (if (string= old-text new-text)
-        nil ; No change
-      
-      ;; Find common prefix
-      (let ((start 0))
-        (while (and (< start old-len)
-                    (< start new-len)
-                    (= (aref old-text start) (aref new-text start)))
-          (setq start (1+ start)))
-        
-        ;; Find common suffix
-        (let ((old-end old-len)
-              (new-end new-len))
-          (while (and (> old-end start)
-                      (> new-end start)
-                      (= (aref old-text (1- old-end)) (aref new-text (1- new-end))))
-            (setq old-end (1- old-end))
-            (setq new-end (1- new-end)))
-          
-          ;; Extract the changed text
-          (let ((changed-text (substring new-text start new-end)))
-            (list :start start
-                  :end old-end
-                  :text changed-text)))))))
+(defun ninetyfive--calculate-and-send-delta ()
+  "Send file content for buffers that haven't been sent yet."
+  (when (and ninetyfive--connected (not ninetyfive--buffer-content-sent))
+    (ninetyfive--send-file-content)
+    (setq ninetyfive--buffer-content-sent t)))
 
 (defun ninetyfive--send-set-workspace ()
   "Send set-workspace message to the server."
@@ -209,10 +170,8 @@ Returns a plist with :start, :end, and :text, or nil if no change."
                                (requestId . ,request-id)
                                (repo . "unknown")
                                (pos . ,byte-length))))
-    ;; Clear previous completion and set new request ID
-    (ninetyfive--clear-completion)
+    ;; Set new request ID
     (setq ninetyfive--current-request-id request-id)
-    (setq ninetyfive--completion-text "")
     
     ;; Send delta or full content as needed
     (ninetyfive--calculate-and-send-delta)
@@ -301,25 +260,6 @@ Argument FRAME: payload"
                            (setq ninetyfive--reconnect-timer nil)
                            (ninetyfive--connect)))))))
 
-(defun ninetyfive--attempt-reconnect ()
-  "Try to reconnect to the WebSocket server, non-blocking."
-  (setq ninetyfive--reconnect-timer nil)
-
-  (let ((url (url-generic-parse-url ninetyfive-websocket-url)))
-    (condition-case err
-        (progn
-          ;; avoids blocking
-          (let ((probe (make-network-process
-                        :name "ninetyfive-probe"
-                        :host (url-host url)
-                        :service (url-port url)
-                        :noquery t
-                        :nowait t)))
-            (delete-process probe)
-            (ninetyfive--connect)))
-      (error
-       (message "[ninetyfive] Connection failed: %s — retrying..." (error-message-string err))
-       (ninetyfive--schedule-reconnect)))))
 
 (defun ninetyfive--on-websocket-close (_websocket id)
   (when (eq id ninetyfive--websocket-id)
@@ -409,7 +349,6 @@ Argument FRAME: payload"
   "Handle file opened event."
   (when ninetyfive--connected
     (setq ninetyfive--buffer-content-sent nil)
-    (setq ninetyfive--buffer-last-content "")
     (ninetyfive--calculate-and-send-delta)))
 
 ;; Hook functions
@@ -423,6 +362,20 @@ Argument FRAME: payload"
     (ninetyfive--send-set-workspace)
     (ninetyfive--on-file-opened)))
 
+(defun ninetyfive--after-change-hook (start end _old-length)
+  "Hook function for after-change-functions to send deltas and request completions.
+START and END are the beginning and end of region just changed."
+  (when ninetyfive--connected
+    (let ((text (buffer-substring-no-properties start end)))
+      ;; Send delta for the change
+      (ninetyfive--send-delta-from-change start end text)
+      
+      ;; Always clear previous completion and request new one for any change
+      (ninetyfive--clear-completion)
+      (setq ninetyfive--completion-text "")
+      (setq ninetyfive--current-request-id nil)
+      (ninetyfive--send-delta-completion-request))))
+
 (defun ninetyfive--accept-completion ()
   "Accept the current completion suggestion."
   (interactive)
@@ -431,71 +384,6 @@ Argument FRAME: payload"
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
-
-(defvar ninetyfive--last-command nil
-  "Command to use when checking if completion should trigger.")
-
-(defun ninetyfive--should-clear-completion ()
-  "Check if completion should be cleared based on current command."
-  (or (memq ninetyfive--last-command '(forward-char backward-char
-                           next-line previous-line
-                           beginning-of-line end-of-line
-                           forward-word backward-word
-                           scroll-up-command scroll-down-command
-                           mouse-set-point))
-      (and (not (eq ninetyfive--last-command 'self-insert-command))
-           (not (eq ninetyfive--last-command 'ninetyfive--accept-completion)))))
-
-(defun ninetyfive--should-trigger-completion ()
-  "Check if we should request a completion based on current command."
-  ;; we need to store last-command since the debounce 'swallows' the command
-  (memq ninetyfive--last-command '(self-insert-command
-                       delete-char
-                       delete-backward-char
-                       delete-forward-char
-                       backward-delete-char-untabify
-                       newline
-                       newline-and-indent)))
-
-(defvar ninetyfive--completion-timer nil
-  "Timer for debouncing delta completion requests.")
-
-;; small debounce to avoid cpu overload during completion reset
-(defconst ninetyfive--completion-delay 0.1
-  "Delay in seconds before triggering a completion request.")
-
-(defun ninetyfive--debounced-completion-request ()
-  "Trigger the delta completion request if still valid."
-  (setq ninetyfive--completion-timer nil)
-
-  (when (and ninetyfive--connected
-             (ninetyfive--should-trigger-completion))
-    (ninetyfive--clear-completion)
-    (setq ninetyfive--completion-text "")
-    (setq ninetyfive--current-request-id nil)
-    (ninetyfive--send-delta-completion-request)))
-
-(defun ninetyfive--post-command-hook ()
-  "Efficient hook function for triggering completions."
-  (setq ninetyfive--last-command this-command)
-  (cond
-   ((and ninetyfive--connected
-         (ninetyfive--should-trigger-completion))
-    ;; wipe pending timer if exists
-    (when (timerp ninetyfive--completion-timer)
-      (cancel-timer ninetyfive--completion-timer))
-
-    (setq ninetyfive--completion-timer
-      (run-at-time ninetyfive--completion-delay nil #'ninetyfive--debounced-completion-request)))
-
-   ((and ninetyfive--completion-overlay (ninetyfive--should-clear-completion))
-    (when (timerp ninetyfive--completion-timer)
-      (cancel-timer ninetyfive--completion-timer)
-      (setq ninetyfive--completion-timer nil))
-    (ninetyfive--clear-completion)
-    (setq ninetyfive--completion-text "")
-    (setq ninetyfive--current-request-id nil))))
-
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
@@ -514,11 +402,10 @@ Argument FRAME: payload"
       (progn
         ;; Enable mode
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
-        (add-hook 'post-command-hook #'ninetyfive--post-command-hook nil t)
+        (add-hook 'after-change-functions #'ninetyfive--after-change-hook nil t)
 
         ;; Initialize buffer state
         (setq ninetyfive--buffer-content-sent nil)
-        (setq ninetyfive--buffer-last-content "")
 
         ;; Only send file content if we're already connected (don't try to connect here)
         (when (and ninetyfive--connected (buffer-file-name))
@@ -526,15 +413,14 @@ Argument FRAME: payload"
 
     ;; Disable mode
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
-    (remove-hook 'post-command-hook #'ninetyfive--post-command-hook t)
+    (remove-hook 'after-change-functions #'ninetyfive--after-change-hook t)
     
     ;; Clear any active completion
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)
     
-    (setq ninetyfive--buffer-content-sent nil)
-    (setq ninetyfive--buffer-last-content "")))
+    (setq ninetyfive--buffer-content-sent nil)))
 
 (defun ninetyfive-turn-on-unless-buffer-read-only ()
   "Turn on `ninetyfive-mode' if the buffer is writable."
