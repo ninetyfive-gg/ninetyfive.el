@@ -404,7 +404,7 @@ START and END are the beginning and end of region just changed."
 ;;;###autoload
 (define-minor-mode ninetyfive-mode
   "Minor mode for NinetyFive."
-  :lighter " NF"
+  :lighter " NinetyFive"
   :global nil
   :keymap (make-sparse-keymap)
   (if ninetyfive-mode
