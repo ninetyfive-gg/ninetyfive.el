@@ -392,11 +392,16 @@ START and END are the beginning and end of region just changed."
     (setq ninetyfive--current-request-id nil)))
 
 (defun ninetyfive--maybe-set-last-buffer ()
-  "Set `ninetyfive--last-buffer` if current buffer is a real file buffer."
-  (when (and (not (minibufferp))
-             (buffer-file-name)
-             (not (string-prefix-p "*" (buffer-name))))
-    (setq ninetyfive--last-buffer (current-buffer))))
+  "Update `ninetyfive--last-buffer` if the selected buffer is a user-facing file buffer."
+  (let ((buf (current-buffer)))
+    (when (and
+           (not (window-minibuffer-p)) 
+           (not (string-match-p "^ \\*Echo Area" (buffer-name)))
+           (not (string-prefix-p "*" (buffer-name)))
+           (buffer-file-name buf) ;; only real files...
+           (get-buffer-window buf 'visible)) ;; and must be visible...
+      (unless (eq buf ninetyfive--last-buffer)
+        (setq ninetyfive--last-buffer buf)))))
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
@@ -415,7 +420,7 @@ START and END are the beginning and end of region just changed."
       (progn
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'after-change-functions #'ninetyfive--after-change-hook nil t)
-        (add-hook 'post-command-hook #'ninetyfive--maybe-set-last-buffer nil t)
+        (add-hook 'buffer-list-update-hook #'ninetyfive--maybe-set-last-buffer nil t)
 
         (setq ninetyfive--last-buffer (current-buffer))
 
