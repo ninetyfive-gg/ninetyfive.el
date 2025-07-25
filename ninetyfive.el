@@ -1,5 +1,4 @@
 ;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t; -*-
-
 ;; Author: NinetyFive
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1") (websocket "1.12"))
@@ -98,7 +97,6 @@
   "Generate a unique request ID."
   (setq ninetyfive--request-id-counter (1+ ninetyfive--request-id-counter))
   (format "%s%d" (format-time-string "%s") ninetyfive--request-id-counter))
-
 (defun ninetyfive--get-file-path ()
   "Get the current file path or \='Untitled-1\=' if buffer is not visiting a file."
   (or (buffer-file-name) "Untitled-1"))
@@ -194,7 +192,6 @@ START and END are buffer positions, TEXT is the replacement text."
       (cancel-timer ninetyfive--reconnect-timer)
       (setq ninetyfive--reconnect-timer nil))
     (setq ninetyfive--connected t)
-    (message "[ninetyfive] Connected flag set to t.")
     (ninetyfive--send-set-workspace)
     (when (and ninetyfive-mode (buffer-file-name))
       (ninetyfive--on-file-opened))))
@@ -247,15 +244,17 @@ START and END are buffer positions, TEXT is the replacement text."
                                    request-id ninetyfive--current-request-id)))))
 
 (defun ninetyfive--on-websocket-message (_websocket frame)
-  "Handle WEBSOCKET message received.
-Argument FRAME: payload"
+  "Handle WEBSOCKET message received. Argument FRAME: payload."
   (let* ((payload (websocket-frame-payload frame))
-         (message (json-read-from-string payload)))
-    ;; Check if this is a completion response
-    (if (assq 'r message)
-        (ninetyfive--handle-completion-response message)
-      ;; Handle other message types if needed
-      (ninetyfive--debug-message "Received message: %s" payload))))
+         (lines (split-string payload "\n" t)))  ;; split by newline, omit empty lines
+    (dolist (line lines)
+      (condition-case err
+          (let ((message (json-read-from-string line)))
+            (if (assq 'r message)
+                (ninetyfive--handle-completion-response message)
+              (ninetyfive--debug-message "[95] Received non-completion message: %s" line)))
+        (error
+         (ninetyfive--debug-message "[95] Failed to parse JSON line: %s\nError: %s" line err))))))
 
 (defun ninetyfive--schedule-reconnect ()
   "Schedule a safe, non-blocking reconnection attempt."
@@ -285,7 +284,7 @@ Argument FRAME: payload"
 
 (defun ninetyfive--connect ()
   "Asynchronously probe and connect to the NinetyFive WebSocket server."
-  (message "[ninetyfive] >>> connect called")
+  ;; (message "[ninetyfive] >>> connect called")
 
   ;; exit if we're already connected
   (when ninetyfive--connected
@@ -328,7 +327,6 @@ Argument FRAME: payload"
                (list 'error err)))))
 
        (lambda (result)
-         (message "[ninetyfive] >>> async callback fired with result: %S" result)
          (pcase result
            (`success
             (if ninetyfive--connected
@@ -379,7 +377,6 @@ START and END are the beginning and end of region just changed."
     (let ((text (buffer-substring-no-properties start end)))
       ;; Send delta for the change
       (ninetyfive--send-delta-from-change start end text)
-      (setq ninetyfive--last-buffer (current-buffer))
       
       ;; Always clear previous completion and request new one for any change
       (ninetyfive--clear-completion)
@@ -396,6 +393,16 @@ START and END are the beginning and end of region just changed."
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
 
+(defun ninetyfive--maybe-set-last-buffer ()
+  "Set `ninetyfive--last-buffer` if current buffer is a real file buffer."
+  (when (and (not (minibufferp))
+             (buffer-file-name)
+             (not (string-prefix-p "*" (buffer-name))))
+    (setq ninetyfive--last-buffer (current-buffer))
+    (message "[ninetyfive] Buffer contents:\n%s"
+         (with-current-buffer ninetyfive--last-buffer
+           (buffer-substring-no-properties (point-min) (point-max))))))
+
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
   "Accept the current completion suggestion."
@@ -411,26 +418,25 @@ START and END are the beginning and end of region just changed."
   :keymap (make-sparse-keymap)
   (if ninetyfive-mode
       (progn
-        ;; Enable mode
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'after-change-functions #'ninetyfive--after-change-hook nil t)
+        (add-hook 'post-command-hook #'ninetyfive--maybe-set-last-buffer nil t)
 
-        ;; Initialize buffer state
+        (setq ninetyfive--last-buffer (current-buffer))
+
+        ;; reset state
         (setq ninetyfive--buffer-content-sent nil)
+        (setq ninetyfive--completion-text "")
+        (setq ninetyfive--current-request-id nil)
 
-        ;; Only send file content if we're already connected (don't try to connect here)
         (when (and ninetyfive--connected (buffer-file-name))
           (ninetyfive--on-file-opened)))
 
-    ;; Disable mode
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
     (remove-hook 'after-change-functions #'ninetyfive--after-change-hook t)
-    
-    ;; Clear any active completion
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)
-    
     (setq ninetyfive--buffer-content-sent nil)))
 
 (defun ninetyfive-turn-on-unless-buffer-read-only ()
