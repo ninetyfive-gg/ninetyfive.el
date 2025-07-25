@@ -284,8 +284,6 @@ START and END are buffer positions, TEXT is the replacement text."
 
 (defun ninetyfive--connect ()
   "Asynchronously probe and connect to the NinetyFive WebSocket server."
-  ;; (message "[ninetyfive] >>> connect called")
-
   ;; exit if we're already connected
   (when ninetyfive--connected
     (cl-return-from ninetyfive--connect nil))
@@ -398,10 +396,7 @@ START and END are the beginning and end of region just changed."
   (when (and (not (minibufferp))
              (buffer-file-name)
              (not (string-prefix-p "*" (buffer-name))))
-    (setq ninetyfive--last-buffer (current-buffer))
-    (message "[ninetyfive] Buffer contents:\n%s"
-         (with-current-buffer ninetyfive--last-buffer
-           (buffer-substring-no-properties (point-min) (point-max))))))
+    (setq ninetyfive--last-buffer (current-buffer))))
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
