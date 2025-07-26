@@ -79,6 +79,9 @@
 (defvar ninetyfive--completion-text ""
   "Completion accumulated so far.")
 
+(defvar ninetyfive--last-point nil
+  "Stores last known point to detect cursor movement.")
+
 (defvar ninetyfive--completion-overlay nil
   "Overlay for displaying completion text.")
 
@@ -403,6 +406,15 @@ START and END are the beginning and end of region just changed."
       (unless (eq buf ninetyfive--last-buffer)
         (setq ninetyfive--last-buffer buf)))))
 
+(defun ninetyfive--maybe-clear-on-cursor-move ()
+  "Clear completion if the cursor has moved."
+  (when (and ninetyfive--completion-overlay
+             (/= (point) ninetyfive--last-point))
+    (ninetyfive--clear-completion)
+    (setq ninetyfive--completion-text "")
+    (setq ninetyfive--current-request-id nil))
+  (setq ninetyfive--last-point (point)))
+
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
   "Accept the current completion suggestion."
@@ -421,6 +433,7 @@ START and END are the beginning and end of region just changed."
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'after-change-functions #'ninetyfive--after-change-hook nil t)
         (add-hook 'buffer-list-update-hook #'ninetyfive--maybe-set-last-buffer nil t)
+        (add-hook 'post-command-hook #'ninetyfive--maybe-clear-on-cursor-move nil t)
 
         (setq ninetyfive--last-buffer (current-buffer))
 
@@ -428,12 +441,16 @@ START and END are the beginning and end of region just changed."
         (setq ninetyfive--buffer-content-sent nil)
         (setq ninetyfive--completion-text "")
         (setq ninetyfive--current-request-id nil)
+        (setq ninetyfive--last-point (point))
 
         (when (and ninetyfive--connected (buffer-file-name))
           (ninetyfive--on-file-opened)))
 
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
     (remove-hook 'after-change-functions #'ninetyfive--after-change-hook t)
+    (remove-hook 'buffer-list-update-hook #'ninetyfive--maybe-set-last-buffer nil t)
+    (remove-hook 'post-command-hook #'ninetyfive--maybe-clear-on-cursor-move nil t)
+
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)
