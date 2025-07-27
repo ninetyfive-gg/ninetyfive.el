@@ -377,15 +377,19 @@ START and END are buffer positions, TEXT is the replacement text."
 (defun ninetyfive--after-change-hook (start end _old-length)
   "Hook function for after-change-functions to send deltas and request completions.
 START and END are the beginning and end of region just changed."
-  (unless ninetyfive--inhibit-after-change
-    (when ninetyfive--connected
-      (let ((text (buffer-substring-no-properties start end)))
-        (ninetyfive--send-delta-from-change start end text)
+  (when ninetyfive--connected
+    (let ((text (buffer-substring-no-properties start end)))
+      (ninetyfive--send-delta-from-change start end text)
+      (setq ninetyfive--last-buffer (current-buffer))
 
-        (ninetyfive--clear-completion)
-        (setq ninetyfive--completion-text "")
-        (setq ninetyfive--current-request-id nil)
-        (ninetyfive--send-delta-completion-request)))))
+      (ninetyfive--clear-completion)
+
+      ;; only clear completion if the inhibit change is set, this is crucial. See ninetyfive--accept-completion
+      (unless ninetyfive--inhibit-after-change
+        (setq ninetyfive--completion-text ""))
+
+      (setq ninetyfive--current-request-id nil)
+      (ninetyfive--send-delta-completion-request))))
 
 (defun ninetyfive--accept-completion ()
   "Accept the current completion suggestion, replacing the rest of the current line."
