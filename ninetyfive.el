@@ -92,6 +92,9 @@
   '(ninetyfive--buffer-content-sent)
   "List of buffer-local variables.")
 
+(defvar ninetyfive--inhibit-after-change nil
+  "If non-nil, suppresses behavior inside `ninetyfive--after-change-hook`.")
+
 ;; This is tracked per buffer
 (dolist (var ninetyfive--buffer-local-vars)
   (make-variable-buffer-local var))
@@ -374,22 +377,29 @@ START and END are buffer positions, TEXT is the replacement text."
 (defun ninetyfive--after-change-hook (start end _old-length)
   "Hook function for after-change-functions to send deltas and request completions.
 START and END are the beginning and end of region just changed."
-  (when ninetyfive--connected
-    (let ((text (buffer-substring-no-properties start end)))
-      ;; Send delta for the change
-      (ninetyfive--send-delta-from-change start end text)
-      
-      ;; Always clear previous completion and request new one for any change
-      (ninetyfive--clear-completion)
-      (setq ninetyfive--completion-text "")
-      (setq ninetyfive--current-request-id nil)
-      (ninetyfive--send-delta-completion-request))))
+  (unless ninetyfive--inhibit-after-change
+    (when ninetyfive--connected
+      (let ((text (buffer-substring-no-properties start end)))
+        (ninetyfive--send-delta-from-change start end text)
+
+        (ninetyfive--clear-completion)
+        (setq ninetyfive--completion-text "")
+        (setq ninetyfive--current-request-id nil)
+        (ninetyfive--send-delta-completion-request)))))
 
 (defun ninetyfive--accept-completion ()
-  "Accept the current completion suggestion."
+  "Accept the current completion suggestion, replacing the rest of the current line."
   (interactive)
   (when (and ninetyfive--completion-overlay ninetyfive--completion-text)
-    (insert ninetyfive--completion-text)
+    ;; trigger the var flip when accepting so that it doesn't trigger the completion reset
+    ;; during the after-change hook
+    (let ((ninetyfive--inhibit-after-change t))
+      (let ((start (point))
+            (end (line-end-position)))
+        (delete-region start end)
+        (insert ninetyfive--completion-text)))
+
+    ;; Clear overlay and reset state
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
