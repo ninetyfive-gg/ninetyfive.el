@@ -1,5 +1,4 @@
 ;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t; -*-
-
 ;; Author: NinetyFive
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1") (websocket "1.12"))
@@ -80,6 +79,9 @@
 (defvar ninetyfive--completion-text ""
   "Completion accumulated so far.")
 
+(defvar ninetyfive--last-point nil
+  "Stores last known point to detect cursor movement.")
+
 (defvar ninetyfive--completion-overlay nil
   "Overlay for displaying completion text.")
 
@@ -90,6 +92,9 @@
   '(ninetyfive--buffer-content-sent)
   "List of buffer-local variables.")
 
+(defvar ninetyfive--inhibit-after-change nil
+  "If non-nil, suppresses behavior inside `ninetyfive--after-change-hook`.")
+
 ;; This is tracked per buffer
 (dolist (var ninetyfive--buffer-local-vars)
   (make-variable-buffer-local var))
@@ -98,7 +103,6 @@
   "Generate a unique request ID."
   (setq ninetyfive--request-id-counter (1+ ninetyfive--request-id-counter))
   (format "%s%d" (format-time-string "%s") ninetyfive--request-id-counter))
-
 (defun ninetyfive--get-file-path ()
   "Get the current file path or \='Untitled-1\=' if buffer is not visiting a file."
   (or (buffer-file-name) "Untitled-1"))
@@ -194,7 +198,6 @@ START and END are buffer positions, TEXT is the replacement text."
       (cancel-timer ninetyfive--reconnect-timer)
       (setq ninetyfive--reconnect-timer nil))
     (setq ninetyfive--connected t)
-    (message "[ninetyfive] Connected flag set to t.")
     (ninetyfive--send-set-workspace)
     (when (and ninetyfive-mode (buffer-file-name))
       (ninetyfive--on-file-opened))))
@@ -214,8 +217,10 @@ START and END are buffer positions, TEXT is the replacement text."
   (ninetyfive--clear-completion)
   (when (and text (> (length text) 0))
     (setq ninetyfive--completion-overlay (make-overlay (point) (point)))
-    (overlay-put ninetyfive--completion-overlay 'after-string
-                 (propertize text 'face '(:foreground "gray" :slant italic)))
+    (let ((completion-overlay-text (propertize text 'face '(:foreground "gray" :slant italic))))
+      ;; Place cursor before suggestion
+      (put-text-property 0 1 'cursor t completion-overlay-text)
+      (overlay-put ninetyfive--completion-overlay 'after-string completion-overlay-text))
     (overlay-put ninetyfive--completion-overlay 'ninetyfive-completion t)
     ;; Add the keybind when the user can accept something
     (when ninetyfive-mode
@@ -245,15 +250,17 @@ START and END are buffer positions, TEXT is the replacement text."
                                    request-id ninetyfive--current-request-id)))))
 
 (defun ninetyfive--on-websocket-message (_websocket frame)
-  "Handle WEBSOCKET message received.
-Argument FRAME: payload"
+  "Handle WEBSOCKET message received. Argument FRAME: payload."
   (let* ((payload (websocket-frame-payload frame))
-         (message (json-read-from-string payload)))
-    ;; Check if this is a completion response
-    (if (assq 'r message)
-        (ninetyfive--handle-completion-response message)
-      ;; Handle other message types if needed
-      (ninetyfive--debug-message "Received message: %s" payload))))
+         (lines (split-string payload "\n" t)))  ;; split by newline, omit empty lines
+    (dolist (line lines)
+      (condition-case err
+          (let ((message (json-read-from-string line)))
+            (if (assq 'r message)
+                (ninetyfive--handle-completion-response message)
+              (ninetyfive--debug-message "[95] Received non-completion message: %s" line)))
+        (error
+         (ninetyfive--debug-message "[95] Failed to parse JSON line: %s\nError: %s" line err))))))
 
 (defun ninetyfive--schedule-reconnect ()
   "Schedule a safe, non-blocking reconnection attempt."
@@ -283,8 +290,6 @@ Argument FRAME: payload"
 
 (defun ninetyfive--connect ()
   "Asynchronously probe and connect to the NinetyFive WebSocket server."
-  (message "[ninetyfive] >>> connect called")
-
   ;; exit if we're already connected
   (when ninetyfive--connected
     (cl-return-from ninetyfive--connect nil))
@@ -326,7 +331,6 @@ Argument FRAME: payload"
                (list 'error err)))))
 
        (lambda (result)
-         (message "[ninetyfive] >>> async callback fired with result: %S" result)
          (pcase result
            (`success
             (if ninetyfive--connected
@@ -375,24 +379,55 @@ Argument FRAME: payload"
 START and END are the beginning and end of region just changed."
   (when ninetyfive--connected
     (let ((text (buffer-substring-no-properties start end)))
-      ;; Send delta for the change
       (ninetyfive--send-delta-from-change start end text)
       (setq ninetyfive--last-buffer (current-buffer))
-      
-      ;; Always clear previous completion and request new one for any change
+
       (ninetyfive--clear-completion)
-      (setq ninetyfive--completion-text "")
+
+      ;; only clear completion if the inhibit change is set, this is crucial. See ninetyfive--accept-completion
+      (unless ninetyfive--inhibit-after-change
+        (setq ninetyfive--completion-text ""))
+
       (setq ninetyfive--current-request-id nil)
       (ninetyfive--send-delta-completion-request))))
 
 (defun ninetyfive--accept-completion ()
-  "Accept the current completion suggestion."
+  "Accept the current completion suggestion, replacing the rest of the current line."
   (interactive)
   (when (and ninetyfive--completion-overlay ninetyfive--completion-text)
-    (insert ninetyfive--completion-text)
+    ;; trigger the var flip when accepting so that it doesn't trigger the completion reset
+    ;; during the after-change hook
+    (let ((ninetyfive--inhibit-after-change t))
+      (let ((start (point))
+            (end (line-end-position)))
+        (delete-region start end)
+        (insert ninetyfive--completion-text)))
+
+    ;; Clear overlay and reset state
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)))
+
+(defun ninetyfive--maybe-set-last-buffer ()
+  "Update `ninetyfive--last-buffer` if the selected buffer is a user-facing file buffer."
+  (let ((buf (current-buffer)))
+    (when (and
+           (not (window-minibuffer-p)) 
+           (not (string-match-p "^ \\*Echo Area" (buffer-name)))
+           (not (string-prefix-p "*" (buffer-name)))
+           (buffer-file-name buf) ;; only real files...
+           (get-buffer-window buf 'visible)) ;; and must be visible...
+      (unless (eq buf ninetyfive--last-buffer)
+        (setq ninetyfive--last-buffer buf)))))
+
+(defun ninetyfive--maybe-clear-on-cursor-move ()
+  "Clear completion if the cursor has moved."
+  (when (and ninetyfive--completion-overlay
+             (/= (point) ninetyfive--last-point))
+    (ninetyfive--clear-completion)
+    (setq ninetyfive--completion-text "")
+    (setq ninetyfive--current-request-id nil))
+  (setq ninetyfive--last-point (point)))
 
 ;;;###autoload
 (defun ninetyfive-accept-completion ()
@@ -409,26 +444,30 @@ START and END are the beginning and end of region just changed."
   :keymap (make-sparse-keymap)
   (if ninetyfive-mode
       (progn
-        ;; Enable mode
         (add-hook 'find-file-hook #'ninetyfive--find-file-hook nil t)
         (add-hook 'after-change-functions #'ninetyfive--after-change-hook nil t)
+        (add-hook 'buffer-list-update-hook #'ninetyfive--maybe-set-last-buffer nil t)
+        (add-hook 'post-command-hook #'ninetyfive--maybe-clear-on-cursor-move nil t)
 
-        ;; Initialize buffer state
+        (setq ninetyfive--last-buffer (current-buffer))
+
+        ;; reset state
         (setq ninetyfive--buffer-content-sent nil)
+        (setq ninetyfive--completion-text "")
+        (setq ninetyfive--current-request-id nil)
+        (setq ninetyfive--last-point (point))
 
-        ;; Only send file content if we're already connected (don't try to connect here)
         (when (and ninetyfive--connected (buffer-file-name))
           (ninetyfive--on-file-opened)))
 
-    ;; Disable mode
     (remove-hook 'find-file-hook #'ninetyfive--find-file-hook t)
     (remove-hook 'after-change-functions #'ninetyfive--after-change-hook t)
-    
-    ;; Clear any active completion
+    (remove-hook 'buffer-list-update-hook #'ninetyfive--maybe-set-last-buffer nil t)
+    (remove-hook 'post-command-hook #'ninetyfive--maybe-clear-on-cursor-move nil t)
+
     (ninetyfive--clear-completion)
     (setq ninetyfive--completion-text "")
     (setq ninetyfive--current-request-id nil)
-    
     (setq ninetyfive--buffer-content-sent nil)))
 
 (defun ninetyfive-turn-on-unless-buffer-read-only ()
