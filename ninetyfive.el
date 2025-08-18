@@ -487,15 +487,13 @@ START and END are the beginning and end of region just changed."
       (if ninetyfive-cache-consent
           (with-temp-file cache-path
             (insert (json-encode '((consent . t)))))
-        (setq ninetyfive--session-consent t))
-      (message "[ninetyfive] Consent automatically enabled by config (mode: on)."))
+        (setq ninetyfive--session-consent t)))
 
      ((string= ninetyfive-indexing-mode "off")
       (if ninetyfive-cache-consent
           (with-temp-file cache-path
             (insert (json-encode '((consent . nil)))))
-        (setq ninetyfive--session-consent nil))
-      (message "[ninetyfive] Consent automatically disabled by config (mode: off)."))
+        (setq ninetyfive--session-consent nil)))
 
      ((and (string= ninetyfive-indexing-mode "ask")
            (not (file-exists-p cache-path)))
@@ -506,8 +504,7 @@ START and END are the beginning and end of region just changed."
         (if ninetyfive-cache-consent
             (with-temp-file cache-path
               (insert (json-encode `((consent . ,consent)))))
-          (setq ninetyfive--session-consent consent))
-        (message "[ninetyfive] Consent saved from prompt: %s" consent))))))
+          (setq ninetyfive--session-consent consent)))))))
 
 ;;https://www.gnu.org/software/emacs/manual/html_node/emacs/Minor-Modes.html
 ;;;###autoload
