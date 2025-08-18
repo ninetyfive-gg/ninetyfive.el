@@ -40,6 +40,28 @@
   :group 'completion
   :prefix "ninetyfive-")
 
+(defgroup ninetyfive nil
+  "NinetyFive extension settings."
+  :group 'tools
+  :prefix "ninetyfive-")
+
+(defcustom ninetyfive-indexing-mode "ask"
+  "Whether NinetyFive can index your workspace.
+
+Values:
+- \"on\": always allow
+- \"off\": never allow
+- \"ask\": prompt and optionally cache"
+  :type '(choice (const :tag "Allow" "on")
+                 (const :tag "Deny" "off")
+                 (const :tag "Ask user" "ask"))
+  :group 'ninetyfive)
+
+(defcustom ninetyfive-cache-consent t
+  "Whether to cache user consent for workspace indexing."
+  :type 'boolean
+  :group 'ninetyfive)
+
 (defcustom ninetyfive-websocket-url "wss://api.ninetyfive.gg"
   "Server URL."
   :type 'string
@@ -49,6 +71,10 @@
   "Whether to show debug messages."
   :type 'boolean
   :group 'ninetyfive)
+
+(defvar ninetyfive--consent-cache-path
+  (expand-file-name "~/.ninetyfive/consent.json")
+  "Path to the consent cache file.")
 
 (defvar ninetyfive--last-buffer nil
   "The most recent buffer where the user made an edit.
@@ -161,10 +187,25 @@ START and END are buffer positions, TEXT is the replacement text."
     (ninetyfive--send-file-content)
     (setq ninetyfive--buffer-content-sent t)))
 
+(defun ninetyfive--read-cached-consent ()
+  "Return t or nil based on cached or session consent. Returns nil if unset."
+  (let ((cache-path (expand-file-name "~/.ninetyfive/consent.json")))
+    (cond
+     ((and ninetyfive-cache-consent (file-exists-p cache-path))
+      (with-temp-buffer
+        (insert-file-contents cache-path)
+        (let* ((json-object-type 'alist)
+               (data (ignore-errors (json-read)))
+               (consent (alist-get 'consent data)))
+          (when (booleanp consent) consent))))
+     (t ninetyfive--session-consent)))) ;; fallback for non cached sessions
+
 (defun ninetyfive--send-set-workspace ()
-  "Send set-workspace message to the server."
-  (let ((message `((type . "set-workspace"))))
-    (ninetyfive--send-message message)))
+  "Send set-workspace message with indexingEnabled if consent was cached."
+  (let ((consent (ninetyfive--read-cached-consent)))
+    (let ((message `((type . "set-workspace")
+                     (indexingEnabled . ,consent))))
+      (ninetyfive--send-message message))))
 
 (defun ninetyfive--send-file-content ()
   "Send file content message to the server."
@@ -435,6 +476,39 @@ START and END are the beginning and end of region just changed."
   (interactive)
   (ninetyfive--accept-completion))
 
+(defvar ninetyfive--session-consent nil
+  "Session-only indexing consent if cache is disabled. Should be t or nil.")
+
+(defun ninetyfive--maybe-prompt-consent ()
+  "Record workspace indexing consent at startup based on config or prompt."
+  (let ((cache-path (expand-file-name "~/.ninetyfive/consent.json")))
+    (cond
+     ((string= ninetyfive-indexing-mode "on")
+      (if ninetyfive-cache-consent
+          (with-temp-file cache-path
+            (insert (json-encode '((consent . t)))))
+        (setq ninetyfive--session-consent t))
+      (message "[ninetyfive] Consent automatically enabled by config (mode: on)."))
+
+     ((string= ninetyfive-indexing-mode "off")
+      (if ninetyfive-cache-consent
+          (with-temp-file cache-path
+            (insert (json-encode '((consent . nil)))))
+        (setq ninetyfive--session-consent nil))
+      (message "[ninetyfive] Consent automatically disabled by config (mode: off)."))
+
+     ((and (string= ninetyfive-indexing-mode "ask")
+           (not (file-exists-p cache-path)))
+      (let* ((choice (completing-read
+                      "This extension can index your workspace to provide better completions. Would you like to allow this? "
+                      '("Allow" "Deny") nil t))
+             (consent (string= choice "Allow")))
+        (if ninetyfive-cache-consent
+            (with-temp-file cache-path
+              (insert (json-encode `((consent . ,consent)))))
+          (setq ninetyfive--session-consent consent))
+        (message "[ninetyfive] Consent saved from prompt: %s" consent))))))
+
 ;;https://www.gnu.org/software/emacs/manual/html_node/emacs/Minor-Modes.html
 ;;;###autoload
 (define-minor-mode ninetyfive-mode
@@ -494,6 +568,7 @@ START and END are the beginning and end of region just changed."
 (defun ninetyfive-start ()
   "Start NinetyFive."
   (interactive)
+  (ninetyfive--maybe-prompt-consent) ;; ensure we prompt for user consent before anything
   (ninetyfive--connect)
   (ninetyfive--setup-global-hooks)
   (global-ninetyfive-mode 1)
