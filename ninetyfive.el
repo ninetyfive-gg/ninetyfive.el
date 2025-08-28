@@ -34,6 +34,7 @@
 (require 'websocket)
 (require 'async)
 (require 'json)
+(require 'browse-url)
 
 (defgroup ninetyfive nil
   "NinetyFive completion."
@@ -579,6 +580,12 @@ START and END are the beginning and end of region just changed."
   (ninetyfive--remove-global-hooks)
   (ninetyfive--disconnect)
   (message "NinetyFive stopped"))
+
+;;;###autoload
+(defun ninetyfive-purchase ()
+  "Open the NinetyFive payment page in your browser."
+  (interactive)
+  (browse-url "https://ninetyfive.gg/api/payment"))
 
 ;;;###autoload
 (defun ninetyfive-toggle-debug-messages ()
