@@ -34,6 +34,7 @@
 (require 'websocket)
 (require 'async)
 (require 'json)
+(require 'browse-url)
 
 (defgroup ninetyfive nil
   "NinetyFive completion."
@@ -62,9 +63,15 @@ Values:
   :type 'boolean
   :group 'ninetyfive)
 
-(defcustom ninetyfive-websocket-url "wss://api.ninetyfive.gg"
+(defcustom ninetyfive-websocket-url "wss://api.ninetyfive.gg/"
   "Server URL."
   :type 'string
+  :group 'ninetyfive)
+
+(defcustom ninetyfive-api-key nil
+  "Optional API key for NinetyFive Ultra."
+  :type '(choice (const :tag "Unset" nil)
+                 (string :tag "API Key"))
   :group 'ninetyfive)
 
 (defcustom ninetyfive-debug-messages nil
@@ -92,6 +99,17 @@ Values:
 
 (defvar ninetyfive--websocket nil
   "WebSocket connection to NinetyFive API.")
+
+(defun ninetyfive--build-websocket-url ()
+  "Build the WebSocket URL, with an API key if set."
+  (let* ((base ninetyfive-websocket-url)
+         (api (and (stringp ninetyfive-api-key)
+                   (> (length ninetyfive-api-key) 0)
+                   ninetyfive-api-key)))
+    (if api
+        (concat base (if (string-match-p "\\?" base) "&" "?")
+                "api_key=" api)
+      base)))
 
 (defvar ninetyfive--connected nil
   "Whether we're connected to the WebSocket.")
@@ -345,7 +363,8 @@ START and END are buffer positions, TEXT is the replacement text."
   (setq ninetyfive--websocket-id (1+ ninetyfive--websocket-id))
   (let ((this-id ninetyfive--websocket-id))
 
-    (let* ((parsed-url (url-generic-parse-url ninetyfive-websocket-url))
+    (let* ((ws-url (ninetyfive--build-websocket-url))
+           (parsed-url (url-generic-parse-url ws-url))
            (host (url-host parsed-url))
            (raw-port (url-port parsed-url))
            (port (if (or (null raw-port) (= raw-port 0))
@@ -377,7 +396,7 @@ START and END are buffer positions, TEXT is the replacement text."
             (if ninetyfive--connected
                 (message "[ninetyfive] Probe succeeded, but already connected.")
               (setq ninetyfive--websocket
-                    (websocket-open ninetyfive-websocket-url
+                    (websocket-open ws-url
                                     :on-open (lambda (ws)
                                                (ninetyfive--on-websocket-open ws this-id))
                                     :on-message #'ninetyfive--on-websocket-message
@@ -579,6 +598,12 @@ START and END are the beginning and end of region just changed."
   (ninetyfive--remove-global-hooks)
   (ninetyfive--disconnect)
   (message "NinetyFive stopped"))
+
+;;;###autoload
+(defun ninetyfive-purchase ()
+  "Open the NinetyFive payment page in your browser."
+  (interactive)
+  (browse-url "https://ninetyfive.gg/api/payment"))
 
 ;;;###autoload
 (defun ninetyfive-toggle-debug-messages ()
