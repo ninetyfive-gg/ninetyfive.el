@@ -1,7 +1,7 @@
 ;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t; -*-
 ;; Author: NinetyFive
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "26.1") (websocket "1.12"))
+;; Package-Requires: ((emacs "26.1") (websocket "1.12") (async "1.9.7"))
 ;; Keywords: convenience, productivity
 ;; URL: https://github.com/ninetyfive-gg/ninetyfive.el
 
