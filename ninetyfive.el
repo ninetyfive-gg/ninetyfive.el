@@ -1,6 +1,6 @@
 ;;; ninetyfive.el --- NinetyFive -*- lexical-binding: t; -*-
 ;; Author: NinetyFive
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "26.1") (websocket "1.12") (async "1.9.7"))
 ;; Keywords: convenience, productivity
 ;; URL: https://github.com/ninetyfive-gg/ninetyfive.el
@@ -35,6 +35,7 @@
 (require 'async)
 (require 'json)
 (require 'browse-url)
+(require 'url-util)
 
 (defgroup ninetyfive nil
   "NinetyFive completion."
@@ -67,6 +68,9 @@ Values:
   "Server URL."
   :type 'string
   :group 'ninetyfive)
+
+(defconst ninetyfive-version "0.2.0"
+  "Current NinetyFive package version.")
 
 (defcustom ninetyfive-api-key nil
   "Optional API key for NinetyFive Ultra."
@@ -105,11 +109,24 @@ Values:
   (let* ((base ninetyfive-websocket-url)
          (api (and (stringp ninetyfive-api-key)
                    (> (length ninetyfive-api-key) 0)
-                   ninetyfive-api-key)))
-    (if api
-        (concat base (if (string-match-p "\\?" base) "&" "?")
-                "api_key=" api)
-      base)))
+                   ninetyfive-api-key))
+         (params (append `(("editor" . "emacs")
+                           ("version" . ,ninetyfive-version))
+                         (when api `(("api_key" . ,api)))))
+         (separator (cond
+                     ((string-match-p "\\?" base)
+                      (if (and (> (length base) 0)
+                               (eq (aref base (1- (length base))) ??))
+                          ""
+                        "&"))
+                     (t "?")))
+         (query (mapconcat (lambda (pair)
+                             (format "%s=%s"
+                                     (url-hexify-string (format "%s" (car pair)))
+                                     (url-hexify-string (format "%s" (cdr pair)))))
+                           params
+                           "&")))
+    (concat base separator query)))
 
 (defvar ninetyfive--connected nil
   "Whether we're connected to the WebSocket.")
