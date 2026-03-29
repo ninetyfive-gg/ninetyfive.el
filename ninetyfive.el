@@ -191,9 +191,9 @@ Values:
     (let ((json-string (json-encode message)))
       (websocket-send-text ninetyfive--websocket json-string))))
 
-(defun ninetyfive--send-delta-from-change (start end text)
+(defun ninetyfive--send-delta-from-change (start end previous-length text)
   "Send delta message using change information from after-change-functions.
-START and END are buffer positions, TEXT is the replacement text."
+START and END are buffer positions, PREVIOUS_LENGTH is the lenght of the original text, TEXT is the replacement text."
   (when ninetyfive--connected
     (if (not ninetyfive--buffer-content-sent)
         ;; First time - send full content
@@ -201,10 +201,8 @@ START and END are buffer positions, TEXT is the replacement text."
           (ninetyfive--send-file-content)
           (setq ninetyfive--buffer-content-sent t))
       
-      ;; Send delta using the change information directly
-      ;; Convert buffer positions to byte positions
-      (let ((byte-start (string-bytes (buffer-substring-no-properties (point-min) start)))
-            (byte-end (string-bytes (buffer-substring-no-properties (point-min) end))))
+      (let* ((byte-start (string-bytes (buffer-substring-no-properties (point-min) start)))
+             (byte-end (+ byte-start previous-length)))
         
         (ninetyfive--debug-message "Sending file delta - start: %d, end: %d, text length: %d"
                                    byte-start byte-end (length text))
@@ -451,12 +449,12 @@ START and END are buffer positions, TEXT is the replacement text."
     (ninetyfive--send-set-workspace)
     (ninetyfive--on-file-opened)))
 
-(defun ninetyfive--after-change-hook (start end _old-length)
+(defun ninetyfive--after-change-hook (start end old-length)
   "Hook function for after-change-functions to send deltas and request completions.
 START and END are the beginning and end of region just changed."
   (when ninetyfive--connected
     (let ((text (buffer-substring-no-properties start end)))
-      (ninetyfive--send-delta-from-change start end text)
+      (ninetyfive--send-delta-from-change start end old-length text)
       (setq ninetyfive--last-buffer (current-buffer))
 
       (ninetyfive--clear-completion)
